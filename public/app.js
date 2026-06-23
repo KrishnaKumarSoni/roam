@@ -10,7 +10,6 @@ const REGIONS = [
 ];
 
 const grid = document.getElementById("grid");
-const featured = document.getElementById("featured");
 const statusEl = document.getElementById("status");
 const heroTitle = document.getElementById("hero-title");
 const themeToggle = document.getElementById("theme-toggle");
@@ -171,7 +170,6 @@ function sortedItems() {
 }
 
 function showSkeletons() {
-  featured.innerHTML = "";
   grid.innerHTML = "";
   for (let i = 0; i < 12; i++) {
     const c = document.createElement("div");
@@ -190,38 +188,13 @@ function setStatus(msg, isError) {
   statusEl.classList.toggle("error", !!isError);
 }
 
-function renderFeatured(v, label) {
-  const s = v.snippet || {}, st = v.statistics || {}, cd = v.contentDetails || {};
-  const channel = s.channelTitle || "Unknown";
-  featured.innerHTML = `
-    <a class="feat-card" href="https://www.youtube.com/watch?v=${v.id}" target="_blank" rel="noopener">
-      <img src="${esc(thumbOf(s, true))}" alt="${esc(s.title || "")}" />
-      <div class="feat-shade"></div>
-      ${cd.duration ? `<span class="duration">${isoDuration(cd.duration)}</span>` : ""}
-      <div class="feat-body">
-        <span class="feat-tag"><i class="ph-fill ph-trend-up"></i> ${esc(label)}</span>
-        <div class="feat-title">${esc(s.title || "Untitled")}</div>
-        <div class="feat-meta">
-          ${avatarHTML(channel, v.channelThumb)}
-          <span>${esc(channel)}</span><span class="dot">·</span>
-          <span>${fmt(st.viewCount)} views</span><span class="dot">·</span>
-          <span>${timeAgo(s.publishedAt)}</span>
-        </div>
-      </div>
-    </a>`;
-}
-
 function renderVideos() {
   const items = sortedItems();
-  featured.innerHTML = "";
   grid.innerHTML = "";
   if (!items.length) { setStatus("No trending videos for this region or category.", false); return; }
   setStatus(null);
 
-  const featLabel = state.sort === "views" ? "Most viewed" : state.sort === "newest" ? "Newest upload" : "#1 Trending";
-  renderFeatured(items[0], featLabel);
-
-  items.slice(1).forEach((v, idx) => {
+  items.forEach((v, idx) => {
     const s = v.snippet || {}, st = v.statistics || {}, cd = v.contentDetails || {};
     const thumb = thumbOf(s);
     const channel = s.channelTitle || "Unknown";
@@ -232,7 +205,7 @@ function renderVideos() {
     a.style.animationDelay = `${Math.min(idx, 16) * 0.03}s`;
     a.innerHTML = `
       <div class="thumb-wrap">
-        <span class="rank">${idx + 2}</span>
+        <span class="rank">${idx + 1}</span>
         <div class="thumb-fallback" style="display:none"><i class="ph ph-image-broken"></i></div>
         <img loading="lazy" src="${esc(thumb)}" alt="${esc(s.title || "")}"
              onload="this.style.opacity=1"
@@ -262,14 +235,14 @@ async function load() {
     const res = await fetch(`/api/trending?region=${state.region}&category=${state.category}`);
     const data = await res.json();
     if (!res.ok || data.error) {
-      featured.innerHTML = ""; grid.innerHTML = "";
+      grid.innerHTML = "";
       setStatus(`Could not load videos: ${data.error || res.statusText}`, true);
       return;
     }
     state.items = data.items || [];
     renderVideos();
   } catch (e) {
-    featured.innerHTML = ""; grid.innerHTML = "";
+    grid.innerHTML = "";
     setStatus(`Network error: ${e}`, true);
   }
 }
