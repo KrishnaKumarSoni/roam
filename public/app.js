@@ -13,14 +13,17 @@ const grid = document.getElementById("grid");
 const featured = document.getElementById("featured");
 const statusEl = document.getElementById("status");
 const heroTitle = document.getElementById("hero-title");
-const heroSub = document.getElementById("hero-sub");
-const regionCodeEl = document.getElementById("region-code");
 const themeToggle = document.getElementById("theme-toggle");
 const regionBtn = document.getElementById("region-btn");
 const regionMenu = document.getElementById("region-menu");
 const regionCurrent = document.getElementById("region-current");
-const sortSeg = document.querySelector(".sort-seg");
-const catbar = document.getElementById("catbar");
+const cattabs = document.getElementById("cattabs");
+const tabInk = cattabs.querySelector(".tab-ink");
+const sortBtn = document.getElementById("sort-btn");
+const sortMenu = document.getElementById("sort-menu");
+const sortCurrent = document.getElementById("sort-current");
+
+const SORT_LABELS = { trending: "Trending", views: "Most viewed", newest: "Newest" };
 
 const state = {
   region: localStorage.getItem("region") || "US",
@@ -28,6 +31,7 @@ const state = {
   sort: localStorage.getItem("sort") || "trending",
   items: [],
 };
+if (!SORT_LABELS[state.sort]) state.sort = "trending";
 
 // ---- Theme ----
 document.documentElement.setAttribute("data-theme", localStorage.getItem("theme") || "dark");
@@ -63,13 +67,34 @@ const timeAgo = (iso) => {
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const regionName = (code) => (REGIONS.find((r) => r[0] === code) || [code, code])[1];
 
+// Pick the best available thumbnail (crisp). YouTube ids resolve to fixed sizes.
+const thumbOf = (s, big) => {
+  const t = s.thumbnails || {};
+  const order = big
+    ? [t.maxres, t.standard, t.high, t.medium, t.default]
+    : [t.maxres, t.standard, t.high, t.medium, t.default];
+  for (const x of order) if (x?.url) return x.url;
+  return "";
+};
+
 function avatarHTML(channel, thumb) {
   if (thumb) return `<span class="av"><img loading="lazy" src="${esc(thumb)}" alt="${esc(channel)}"
     onerror="this.parentElement.textContent='${esc(channel.charAt(0).toUpperCase())}'" /></span>`;
   return `<span class="av">${esc(channel.charAt(0).toUpperCase())}</span>`;
 }
 
+// ---- Generic dropdown wiring ----
+function wireMenu(btn, menu) {
+  const open = () => { menu.hidden = false; btn.setAttribute("aria-expanded", "true"); };
+  const close = () => { menu.hidden = true; btn.setAttribute("aria-expanded", "false"); };
+  btn.addEventListener("click", (e) => { e.stopPropagation(); menu.hidden ? open() : close(); });
+  document.addEventListener("click", (e) => { if (!menu.hidden && !menu.contains(e.target)) close(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+  return { open, close };
+}
+
 // ---- Region dropdown ----
+const regionCtl = wireMenu(regionBtn, regionMenu);
 function buildRegionMenu() {
   regionMenu.innerHTML = "";
   REGIONS.forEach(([code, name]) => {
@@ -81,59 +106,67 @@ function buildRegionMenu() {
       state.region = code;
       localStorage.setItem("region", code);
       regionCurrent.textContent = name;
-      closeRegionMenu();
+      regionCtl.close();
       buildRegionMenu();
       loadCategories(code).then(load);
     });
     regionMenu.appendChild(b);
   });
 }
-function openRegionMenu() { regionMenu.hidden = false; regionBtn.setAttribute("aria-expanded", "true"); }
-function closeRegionMenu() { regionMenu.hidden = true; regionBtn.setAttribute("aria-expanded", "false"); }
-regionBtn.addEventListener("click", (e) => { e.stopPropagation(); regionMenu.hidden ? openRegionMenu() : closeRegionMenu(); });
-document.addEventListener("click", (e) => { if (!regionMenu.hidden && !regionMenu.contains(e.target)) closeRegionMenu(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeRegionMenu(); });
 
-// ---- Sort segmented control ----
-sortSeg.setAttribute("data-sort", state.sort);
-sortSeg.querySelectorAll(".seg-btn").forEach((btn) => {
-  btn.classList.toggle("is-active", btn.dataset.sort === state.sort);
-  btn.addEventListener("click", () => {
-    state.sort = btn.dataset.sort;
+// ---- Sort dropdown ----
+const sortCtl = wireMenu(sortBtn, sortMenu);
+sortCurrent.textContent = SORT_LABELS[state.sort];
+sortMenu.querySelectorAll(".menu-opt").forEach((opt) => {
+  opt.classList.toggle("is-active", opt.dataset.sort === state.sort);
+  opt.addEventListener("click", () => {
+    state.sort = opt.dataset.sort;
     localStorage.setItem("sort", state.sort);
-    sortSeg.setAttribute("data-sort", state.sort);
-    sortSeg.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("is-active", b === btn));
+    sortCurrent.textContent = SORT_LABELS[state.sort];
+    sortMenu.querySelectorAll(".menu-opt").forEach((o) => o.classList.toggle("is-active", o === opt));
+    sortCtl.close();
     renderVideos();
   });
 });
 
-// ---- Category chips ----
+// ---- Category underline tabs ----
+function moveInk(tab) {
+  if (!tab) return;
+  tabInk.style.width = `${tab.offsetWidth - 28}px`;
+  tabInk.style.transform = `translateX(${tab.offsetLeft + 14}px)`;
+}
 async function loadCategories(region) {
-  catbar.innerHTML = `<button class="chip is-active" data-cat="0">All</button>`;
+  cattabs.querySelectorAll(".tab").forEach((t) => t.remove());
   state.category = "0";
+  const tabs = [["0", "All"]];
   try {
     const res = await fetch(`/api/categories?region=${region}`);
     const data = await res.json();
-    (data.items || []).filter((c) => c.snippet?.assignable).forEach((c) => {
-      const b = document.createElement("button");
-      b.className = "chip"; b.dataset.cat = c.id; b.textContent = c.snippet.title;
-      catbar.appendChild(b);
-    });
-  } catch (_) { /* categories are optional */ }
-  catbar.querySelectorAll(".chip").forEach((chip) => {
-    chip.addEventListener("click", () => {
-      catbar.querySelectorAll(".chip").forEach((c) => c.classList.remove("is-active"));
-      chip.classList.add("is-active");
-      state.category = chip.dataset.cat;
+    (data.items || []).filter((c) => c.snippet?.assignable).forEach((c) => tabs.push([c.id, c.snippet.title]));
+  } catch (_) { /* optional */ }
+  tabs.forEach(([id, name], i) => {
+    const b = document.createElement("button");
+    b.className = "tab" + (i === 0 ? " is-active" : "");
+    b.dataset.cat = id; b.textContent = name;
+    b.addEventListener("click", () => {
+      cattabs.querySelectorAll(".tab").forEach((t) => t.classList.remove("is-active"));
+      b.classList.add("is-active");
+      moveInk(b);
+      b.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+      state.category = id;
       load();
     });
+    cattabs.insertBefore(b, tabInk);
   });
+  requestAnimationFrame(() => moveInk(cattabs.querySelector(".tab.is-active")));
 }
+window.addEventListener("resize", () => moveInk(cattabs.querySelector(".tab.is-active")));
 
-// ---- Render ----
+// ---- Sort + render ----
 function sortedItems() {
   const items = state.items.slice();
-  if (state.sort === "newest") items.sort((a, b) => new Date(b.snippet.publishedAt) - new Date(a.snippet.publishedAt));
+  if (state.sort === "views") items.sort((a, b) => (+b.statistics?.viewCount || 0) - (+a.statistics?.viewCount || 0));
+  else if (state.sort === "newest") items.sort((a, b) => new Date(b.snippet.publishedAt) - new Date(a.snippet.publishedAt));
   return items;
 }
 
@@ -157,22 +190,16 @@ function setStatus(msg, isError) {
   statusEl.classList.toggle("error", !!isError);
 }
 
-function thumbOf(s, size) {
-  const t = s.thumbnails || {};
-  if (size === "big") return (t.maxres || t.standard || t.high || t.medium || {}).url || "";
-  return (t.medium || t.high || t.default || {}).url || "";
-}
-
-function renderFeatured(v) {
+function renderFeatured(v, label) {
   const s = v.snippet || {}, st = v.statistics || {}, cd = v.contentDetails || {};
   const channel = s.channelTitle || "Unknown";
   featured.innerHTML = `
     <a class="feat-card" href="https://www.youtube.com/watch?v=${v.id}" target="_blank" rel="noopener">
-      <img src="${esc(thumbOf(s, "big"))}" alt="${esc(s.title || "")}" />
+      <img src="${esc(thumbOf(s, true))}" alt="${esc(s.title || "")}" />
       <div class="feat-shade"></div>
       ${cd.duration ? `<span class="duration">${isoDuration(cd.duration)}</span>` : ""}
       <div class="feat-body">
-        <span class="feat-tag"><i class="ph-fill ph-crown-simple"></i> #1 in ${esc(regionName(state.region))}</span>
+        <span class="feat-tag"><i class="ph-fill ph-trend-up"></i> ${esc(label)}</span>
         <div class="feat-title">${esc(s.title || "Untitled")}</div>
         <div class="feat-meta">
           ${avatarHTML(channel, v.channelThumb)}
@@ -188,13 +215,13 @@ function renderVideos() {
   const items = sortedItems();
   featured.innerHTML = "";
   grid.innerHTML = "";
-  if (!items.length) { setStatus("No trending videos returned for this region or category.", false); return; }
+  if (!items.length) { setStatus("No trending videos for this region or category.", false); return; }
   setStatus(null);
 
-  renderFeatured(items[0]);
+  const featLabel = state.sort === "views" ? "Most viewed" : state.sort === "newest" ? "Newest upload" : "#1 Trending";
+  renderFeatured(items[0], featLabel);
 
   items.slice(1).forEach((v, idx) => {
-    const i = idx + 1;
     const s = v.snippet || {}, st = v.statistics || {}, cd = v.contentDetails || {};
     const thumb = thumbOf(s);
     const channel = s.channelTitle || "Unknown";
@@ -205,12 +232,12 @@ function renderVideos() {
     a.style.animationDelay = `${Math.min(idx, 16) * 0.03}s`;
     a.innerHTML = `
       <div class="thumb-wrap">
-        <span class="rank">#${i + 1}</span>
+        <span class="rank">${idx + 2}</span>
         <div class="thumb-fallback" style="display:none"><i class="ph ph-image-broken"></i></div>
         <img loading="lazy" src="${esc(thumb)}" alt="${esc(s.title || "")}"
              onload="this.style.opacity=1"
              onerror="this.style.display='none';this.previousElementSibling.style.display='grid'"
-             style="opacity:0;transition:opacity .4s" />
+             style="opacity:0;transition:opacity .35s" />
         ${cd.duration ? `<span class="duration">${isoDuration(cd.duration)}</span>` : ""}
         <div class="play"><i class="ph-fill ph-play"></i></div>
       </div>
@@ -228,10 +255,7 @@ function renderVideos() {
 
 // ---- Load ----
 async function load() {
-  const name = regionName(state.region);
-  heroTitle.textContent = name;
-  regionCodeEl.textContent = state.region;
-  heroSub.textContent = `The most-watched videos in ${name}, refreshed live.`;
+  heroTitle.textContent = regionName(state.region);
   setStatus(null);
   showSkeletons();
   try {
