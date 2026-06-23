@@ -172,6 +172,13 @@ main { position: relative; z-index: 1; padding: 0 clamp(16px, 4vw, 44px) 64px; m
 .cat-opt.is-active { background: color-mix(in srgb, var(--burnt) 16%, transparent); }
 .cat-opt.is-active::after { content: "✓"; margin-left: auto; color: var(--burnt); }
 
+/* ---------- RISING BAR ---------- */
+.rising-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 0 2px; }
+.rising-cap { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--burnt); margin-right: 4px; }
+.rising-cap i { font-size: 15px; }
+.rb-pick { position: relative; }
+.picker-btn .rb-cap { color: var(--text-faint); font-weight: 500; margin-right: 1px; }
+
 /* ---------- STATUS ---------- */
 .status { margin: 18px 0 0; padding: 14px 18px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--stroke); color: var(--text-dim); font-size: 14px; }
 .status.error { border-color: var(--rust); color: var(--ember); }

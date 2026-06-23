@@ -47,6 +47,24 @@ const reachRatio = (v) => {
   return (+v.statistics?.viewCount || 0) / subs;
 };
 
+// ---- Rising creators (real Underdogs) config ----
+const SUB_OPTS = [
+  [5000, "Under 5K subs"], [10000, "Under 10K subs"], [15000, "Under 15K subs"],
+  [25000, "Under 25K subs"], [50000, "Under 50K subs"], [100000, "Under 100K subs"],
+];
+const VIEW_OPTS = [[10000, "10K+ views"], [50000, "50K+ views"], [100000, "100K+ views"], [250000, "250K+ views"]];
+const WINDOW_OPTS = [[24, "Last 24h"], [48, "Last 48h"], [72, "Last 72h"]];
+
+const risingBar = document.getElementById("rising-bar");
+const catPicker = document.querySelector(".cat-picker");
+const sortPicker = document.querySelector(".sort-picker");
+
+state.maxSubs = +localStorage.getItem("maxSubs") || 10000;
+state.minViews = +localStorage.getItem("minViews") || 50000;
+state.windowH = +localStorage.getItem("windowH") || 48;
+state.risingItems = [];
+state.risingKey = null;
+
 // ---- Theme ----
 document.documentElement.setAttribute("data-theme", localStorage.getItem("theme") || "dark");
 themeToggle.addEventListener("click", () => {
@@ -122,7 +140,9 @@ function buildRegionMenu() {
       regionCurrent.textContent = name;
       regionCtl.close();
       buildRegionMenu();
-      loadCategories(code).then(load);
+      state.risingKey = null;
+      if (state.underdogs) { loadCategories(code); loadRising(); }
+      else loadCategories(code).then(load);
     });
     regionMenu.appendChild(b);
   });
@@ -219,21 +239,103 @@ underToggle.addEventListener("click", () => {
   state.underdogs = !state.underdogs;
   localStorage.setItem("underdogs", state.underdogs ? "1" : "0");
   syncToggle(underToggle, state.underdogs);
-  renderVideos();
+  applyMode();
 });
 
-// ---- Sort + render ----
+// Switch chrome between Trending mode and Rising (Underdogs) mode.
+function applyMode() {
+  const on = state.underdogs;
+  risingBar.hidden = !on;
+  catPicker.style.display = on ? "none" : "";
+  sortPicker.style.display = on ? "none" : "";
+  localToggle.style.display = on ? "none" : "";
+  if (on) loadRising(); else load();
+}
+
+// ---- Generic dropdown picker (used by rising filter bar) ----
+function buildPicker(container, caption, options, current, onChange) {
+  container.innerHTML = "";
+  const btn = document.createElement("button");
+  btn.className = "picker-btn";
+  btn.setAttribute("aria-haspopup", "listbox");
+  const menu = document.createElement("div");
+  menu.className = "menu"; menu.hidden = true; menu.setAttribute("role", "listbox");
+  const cur = options.find((o) => o[0] === current) || options[0];
+  btn.innerHTML = `<span class="rb-cap">${caption}</span><span class="rb-val">${esc(cur[1])}</span><i class="ph ph-caret-down chev"></i>`;
+  options.forEach(([value, label]) => {
+    const o = document.createElement("button");
+    o.className = "menu-opt" + (value === current ? " is-active" : "");
+    o.innerHTML = `<span class="opt-name">${esc(label)}</span>`;
+    o.addEventListener("click", () => {
+      menu.querySelectorAll(".menu-opt").forEach((x) => x.classList.remove("is-active"));
+      o.classList.add("is-active");
+      btn.querySelector(".rb-val").textContent = label;
+      menu.hidden = true; btn.setAttribute("aria-expanded", "false");
+      onChange(value);
+    });
+    menu.appendChild(o);
+  });
+  container.appendChild(btn);
+  container.appendChild(menu);
+  wireMenu(btn, menu);
+}
+
+buildPicker(document.getElementById("rb-subs"), "", SUB_OPTS, state.maxSubs, (v) => {
+  state.maxSubs = v; localStorage.setItem("maxSubs", v); renderVideos();
+});
+buildPicker(document.getElementById("rb-views"), "", VIEW_OPTS, state.minViews, (v) => {
+  state.minViews = v; localStorage.setItem("minViews", v); renderVideos();
+});
+buildPicker(document.getElementById("rb-window"), "", WINDOW_OPTS, state.windowH, (v) => {
+  state.windowH = v; localStorage.setItem("windowH", v); renderVideos();
+});
+
+// ---- Trending view filter/sort ----
 function visibleItems() {
   let items = state.items.slice();
   if (state.localOnly) items = items.filter((v) => !v.isGlobal);
-  if (state.underdogs) {
-    items.sort((a, b) => reachRatio(b) - reachRatio(a)); // outperformance first
-  } else if (state.sort === "views") {
-    items.sort((a, b) => (+b.statistics?.viewCount || 0) - (+a.statistics?.viewCount || 0));
-  } else if (state.sort === "newest") {
-    items.sort((a, b) => new Date(b.snippet.publishedAt) - new Date(a.snippet.publishedAt));
-  }
+  if (state.sort === "views") items.sort((a, b) => (+b.statistics?.viewCount || 0) - (+a.statistics?.viewCount || 0));
+  else if (state.sort === "newest") items.sort((a, b) => new Date(b.snippet.publishedAt) - new Date(a.snippet.publishedAt));
   return items;
+}
+
+// ---- Rising view: filter the cached pool, auto-relaxing to avoid empties ----
+function filterRising() {
+  const pool = state.risingItems;
+  if (!pool.length) return { items: [], note: "" };
+  const now = Date.now();
+  const pass = (maxSubs, minViews, windowH) =>
+    pool.filter((v) =>
+      v.channelSubs <= maxSubs &&
+      (+v.statistics?.viewCount || 0) >= minViews &&
+      (now - new Date(v.snippet.publishedAt).getTime()) <= windowH * 3600 * 1000
+    );
+
+  let items = pass(state.maxSubs, state.minViews, state.windowH);
+  let note = "";
+  if (!items.length) {
+    // Relax in order: window -> min views -> sub ceiling.
+    const viewSteps = VIEW_OPTS.map((o) => o[0]).filter((x) => x <= state.minViews).reverse();
+    const subSteps = SUB_OPTS.map((o) => o[0]).filter((x) => x >= state.maxSubs);
+    outer:
+    for (const w of [Math.max(state.windowH, 72), 72]) {
+      for (const mv of viewSteps) {
+        for (const ms of subSteps) {
+          items = pass(ms, mv, w);
+          if (items.length) {
+            const bits = [];
+            if (ms !== state.maxSubs) bits.push(`under ${fmt(ms)} subs`);
+            if (mv !== state.minViews) bits.push(`${fmt(mv)}+ views`);
+            if (w !== state.windowH) bits.push(`last ${w}h`);
+            note = bits.length ? `No exact matches — widened to ${bits.join(", ")}.` : "";
+            break outer;
+          }
+        }
+      }
+    }
+  }
+  items = items.slice().sort((a, b) => reachRatio(b) - reachRatio(a));
+  return { items, note };
 }
 
 function showSkeletons() {
@@ -255,7 +357,43 @@ function setStatus(msg, isError) {
   statusEl.classList.toggle("error", !!isError);
 }
 
+function buildCard(v, idx, underdog) {
+  const s = v.snippet || {}, st = v.statistics || {}, cd = v.contentDetails || {};
+  const thumb = thumbOf(s);
+  const channel = s.channelTitle || "Unknown";
+  const ratio = reachRatio(v);
+  const showReach = underdog && ratio >= 1.5;
+  const subsMeta = underdog && v.channelSubs ? `<span class="dot">·</span>${fmt(v.channelSubs)} subs` : "";
+  const a = document.createElement("a");
+  a.className = "card";
+  a.href = `https://www.youtube.com/watch?v=${v.id}`;
+  a.target = "_blank"; a.rel = "noopener";
+  a.style.animationDelay = `${Math.min(idx, 16) * 0.03}s`;
+  a.innerHTML = `
+    <div class="thumb-wrap">
+      ${underdog ? "" : `<span class="rank">${idx + 1}</span>`}
+      ${showReach ? `<span class="reach"><i class="ph-fill ph-rocket-launch"></i>${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}× reach</span>` : ""}
+      <div class="thumb-fallback" style="display:none"><i class="ph ph-image-broken"></i></div>
+      <img loading="lazy" src="${esc(thumb)}" alt="${esc(s.title || "")}"
+           onload="this.style.opacity=1"
+           onerror="this.style.display='none';this.previousElementSibling.style.display='grid'"
+           style="opacity:0;transition:opacity .35s" />
+      ${cd.duration ? `<span class="duration">${isoDuration(cd.duration)}</span>` : ""}
+      <div class="play"><i class="ph-fill ph-play"></i></div>
+    </div>
+    <div class="card-body">
+      ${avatarHTML(channel, v.channelThumb)}
+      <div class="card-text">
+        <div class="card-title">${esc(s.title || "Untitled")}</div>
+        <div class="card-channel">${esc(channel)}</div>
+        <div class="card-meta">${fmt(st.viewCount)} views${subsMeta}<span class="dot">·</span>${timeAgo(s.publishedAt)}</div>
+      </div>
+    </div>`;
+  return a;
+}
+
 function renderVideos() {
+  if (state.underdogs) return renderRising();
   const items = visibleItems();
   grid.innerHTML = "";
   if (!items.length) {
@@ -268,41 +406,41 @@ function renderVideos() {
     return;
   }
   setStatus(null);
+  items.forEach((v, idx) => grid.appendChild(buildCard(v, idx, false)));
+}
 
-  items.forEach((v, idx) => {
-    const s = v.snippet || {}, st = v.statistics || {}, cd = v.contentDetails || {};
-    const thumb = thumbOf(s);
-    const channel = s.channelTitle || "Unknown";
-    const ratio = reachRatio(v);
-    const showReach = state.underdogs && ratio >= 1.5;
-    const subsMeta = v.channelSubs ? `<span class="dot">·</span>${fmt(v.channelSubs)} subs` : "";
-    const a = document.createElement("a");
-    a.className = "card";
-    a.href = `https://www.youtube.com/watch?v=${v.id}`;
-    a.target = "_blank"; a.rel = "noopener";
-    a.style.animationDelay = `${Math.min(idx, 16) * 0.03}s`;
-    a.innerHTML = `
-      <div class="thumb-wrap">
-        <span class="rank">${idx + 1}</span>
-        ${showReach ? `<span class="reach"><i class="ph-fill ph-rocket-launch"></i>${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}× reach</span>` : ""}
-        <div class="thumb-fallback" style="display:none"><i class="ph ph-image-broken"></i></div>
-        <img loading="lazy" src="${esc(thumb)}" alt="${esc(s.title || "")}"
-             onload="this.style.opacity=1"
-             onerror="this.style.display='none';this.previousElementSibling.style.display='grid'"
-             style="opacity:0;transition:opacity .35s" />
-        ${cd.duration ? `<span class="duration">${isoDuration(cd.duration)}</span>` : ""}
-        <div class="play"><i class="ph-fill ph-play"></i></div>
-      </div>
-      <div class="card-body">
-        ${avatarHTML(channel, v.channelThumb)}
-        <div class="card-text">
-          <div class="card-title">${esc(s.title || "Untitled")}</div>
-          <div class="card-channel">${esc(channel)}</div>
-          <div class="card-meta">${fmt(st.viewCount)} views${state.underdogs ? subsMeta : ""}<span class="dot">·</span>${timeAgo(s.publishedAt)}</div>
-        </div>
-      </div>`;
-    grid.appendChild(a);
-  });
+function renderRising() {
+  const { items, note } = filterRising();
+  grid.innerHTML = "";
+  if (!items.length) {
+    setStatus("No rising creators found in this region right now. Try another region.", false);
+    return;
+  }
+  setStatus(note || null);
+  items.forEach((v, idx) => grid.appendChild(buildCard(v, idx, true)));
+}
+
+async function loadRising() {
+  const key = state.region;
+  heroTitle.textContent = regionName(state.region);
+  setStatus(null);
+  showSkeletons();
+  if (state.risingKey === key && state.risingItems.length) { renderRising(); return; }
+  try {
+    const res = await fetch(`/api/rising?region=${state.region}`);
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      grid.innerHTML = "";
+      setStatus(`Could not load rising creators: ${data.error || res.statusText}`, true);
+      return;
+    }
+    state.risingItems = data.items || [];
+    state.risingKey = key;
+    renderRising();
+  } catch (e) {
+    grid.innerHTML = "";
+    setStatus(`Network error: ${e}`, true);
+  }
 }
 
 // ---- Load ----
@@ -329,4 +467,4 @@ async function load() {
 // ---- Boot ----
 regionCurrent.textContent = regionName(state.region);
 buildRegionMenu();
-(async () => { await loadCategories(state.region); load(); })();
+(async () => { await loadCategories(state.region); applyMode(); })();

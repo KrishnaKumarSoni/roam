@@ -154,4 +154,82 @@ function categories(region) {
   return fetchYouTube("videoCategories", { part: "snippet", regionCode: region });
 }
 
-module.exports = { fetchYouTube, trending, categories };
+// ---- Rising creators ("real" Underdogs) ----
+// Find recent, high-view videos from SMALL channels — these never appear in the
+// trending chart. We cast a wide net (top-viewed videos in the last 72h), drop
+// mega-channels, and return an enriched pool the client filters instantly.
+const RISING_TTL = 60 * 60 * 1000; // 1h
+const RISING_WINDOW_H = 72;
+const RISING_SUB_CEILING = 200000; // keep only smallish channels in the pool
+const RISING_MIN_VIEWS = 10000;    // floor; client raises it
+// search.list needs a query term (region-only search returns nothing), so we
+// sweep a basket of broad seeds to approximate "what's rising region-wide".
+const RISING_SEEDS = ["music", "gaming", "vlog", "comedy", "news", "sports", "dance", "cooking", "podcast", "challenge"];
+
+async function rising(region, query) {
+  const q = (query || "").trim();
+  const key = `rising:${region}:${q.toLowerCase() || "_all"}`;
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.t < RISING_TTL) return { status: 200, json: hit.data, cached: true };
+
+  const publishedAfter = new Date(Date.now() - RISING_WINDOW_H * 3600 * 1000).toISOString();
+  const seeds = q ? [q] : RISING_SEEDS;
+
+  // 1) Candidate video ids — top-viewed recent uploads per seed (region-scoped).
+  let ids = [];
+  const searches = await Promise.all(
+    seeds.map((seed) =>
+      fetchYouTube("search", {
+        part: "snippet", type: "video", order: "viewCount",
+        regionCode: region, publishedAfter, maxResults: "50", q: seed,
+      }).catch(() => ({ status: 0, json: {} }))
+    )
+  );
+  searches.forEach((r) => (r.json.items || []).forEach((it) => { if (it.id?.videoId) ids.push(it.id.videoId); }));
+  ids = [...new Set(ids)];
+  if (!ids.length) { const data = { items: [], window: RISING_WINDOW_H }; cache.set(key, { t: Date.now(), data }); return { status: 200, json: data }; }
+
+  // 2) Video details (views, duration, publish time).
+  let vids = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const { json } = await fetchYouTube("videos", { part: "snippet,statistics,contentDetails", id: ids.slice(i, i + 50).join(","), maxResults: "50" });
+    vids = vids.concat(json.items || []);
+  }
+
+  // 3) Drop Shorts.
+  const shorts = await findShorts(vids);
+  vids = vids.filter((v) => !shorts.has(v.id));
+
+  // 4) Channel subscriber counts + avatars.
+  const chIds = [...new Set(vids.map((v) => v.snippet?.channelId).filter(Boolean))];
+  const subMap = {}, thumbMap = {};
+  for (let i = 0; i < chIds.length; i += 50) {
+    const { json } = await fetchYouTube("channels", { part: "snippet,statistics", id: chIds.slice(i, i + 50).join(","), maxResults: "50" });
+    (json.items || []).forEach((c) => {
+      const t = c.snippet?.thumbnails;
+      thumbMap[c.id] = (t?.medium || t?.default || {}).url || null;
+      subMap[c.id] = c.statistics?.hiddenSubscriberCount ? null : (+c.statistics?.subscriberCount || null);
+    });
+  }
+
+  // 5) Keep small channels with real traction; rank by reach ratio.
+  const out = [];
+  for (const v of vids) {
+    const subs = subMap[v.snippet?.channelId];
+    const views = +v.statistics?.viewCount || 0;
+    if (subs == null) continue;                                   // need subs to judge
+    if (subs > RISING_SUB_CEILING) continue;                      // not an underdog
+    if (views < RISING_MIN_VIEWS) continue;                       // needs traction
+    if (/-\s*Topic$/.test(v.snippet?.channelTitle || "")) continue; // auto-generated
+    v.channelThumb = thumbMap[v.snippet?.channelId] || null;
+    v.channelSubs = subs;
+    out.push(v);
+  }
+  out.sort((a, b) => (b.statistics.viewCount / Math.max(b.channelSubs, 1)) - (a.statistics.viewCount / Math.max(a.channelSubs, 1)));
+
+  const data = { items: out.slice(0, 120), window: RISING_WINDOW_H };
+  cache.set(key, { t: Date.now(), data });
+  return { status: 200, json: data };
+}
+
+module.exports = { fetchYouTube, trending, categories, rising };

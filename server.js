@@ -15,7 +15,7 @@ const path = require("path");
   } catch (_) {}
 })();
 
-const { trending, categories } = require("./api/_lib");
+const { trending, categories, rising } = require("./api/_lib");
 const PORT = process.env.PORT || 4123;
 const PUBLIC = path.join(__dirname, "public");
 
@@ -44,6 +44,20 @@ const server = http.createServer(async (req, res) => {
     const category = u.searchParams.get("category") || "0";
     try {
       const { status, json } = await trending(region, category);
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(status === 200 ? json : { error: json.error?.message || "YouTube API error" }));
+    } catch (e) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(e) }));
+    }
+    return;
+  }
+
+  if (u.pathname === "/api/rising") {
+    const region = (u.searchParams.get("region") || "US").toUpperCase();
+    const q = u.searchParams.get("q") || "";
+    try {
+      const { status, json } = await rising(region, q);
       res.writeHead(status, { "Content-Type": "application/json" });
       res.end(JSON.stringify(status === 200 ? json : { error: json.error?.message || "YouTube API error" }));
     } catch (e) {
