@@ -27,15 +27,37 @@ function durationSeconds(iso) {
   const m = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/.exec(iso || "") || [];
   return (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0);
 }
-function isShort(v) {
-  const secs = durationSeconds(v.contentDetails?.duration);
-  if (!secs) return false; // live streams have 0 — keep them
-  if (secs <= 60) return true; // classic Shorts
-  if (secs <= 181) {
+
+// A video is a Short iff youtube.com/shorts/{id} returns 200; a regular video
+// redirects (303) to /watch. We only probe borderline-length clips.
+function isShortByUrl(id) {
+  return new Promise((resolve) => {
+    const req = https.request(
+      { method: "HEAD", hostname: "www.youtube.com", path: `/shorts/${id}`, headers: { "User-Agent": "Mozilla/5.0" } },
+      (r) => { resolve(r.statusCode === 200); r.resume(); }
+    );
+    req.on("error", () => resolve(false));
+    req.setTimeout(4000, () => { req.destroy(); resolve(false); });
+    req.end();
+  });
+}
+
+// Returns a Set of video ids that are Shorts.
+async function findShorts(items) {
+  const shorts = new Set();
+  const toProbe = [];
+  for (const v of items) {
+    const secs = durationSeconds(v.contentDetails?.duration);
+    if (secs === 0) continue; // live streams — keep
+    if (secs <= 60) { shorts.add(v.id); continue; } // classic Shorts
+    if (secs > 180) continue; // too long to be a Short
     const txt = `${v.snippet?.title || ""} ${v.snippet?.description || ""}`.toLowerCase();
-    if (txt.includes("#short")) return true;
+    if (txt.includes("#short")) { shorts.add(v.id); continue; }
+    toProbe.push(v.id); // 61-180s, untagged: verify via /shorts/ redirect
   }
-  return false;
+  const flags = await Promise.all(toProbe.map(isShortByUrl));
+  toProbe.forEach((id, i) => { if (flags[i]) shorts.add(id); });
+  return shorts;
 }
 
 // 15-min warm-instance cache.
@@ -67,7 +89,8 @@ async function trending(region, category) {
     if (!pageToken) break;
   }
 
-  items = items.filter((v) => !isShort(v)).slice(0, 50);
+  const shorts = await findShorts(items);
+  items = items.filter((v) => !shorts.has(v.id)).slice(0, 50);
 
   // Enrich with real channel avatars (one extra call, up to 50 channel ids).
   try {

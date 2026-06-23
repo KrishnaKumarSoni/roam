@@ -16,8 +16,10 @@ const themeToggle = document.getElementById("theme-toggle");
 const regionBtn = document.getElementById("region-btn");
 const regionMenu = document.getElementById("region-menu");
 const regionCurrent = document.getElementById("region-current");
-const cattabs = document.getElementById("cattabs");
-const tabInk = cattabs.querySelector(".tab-ink");
+const catBtn = document.getElementById("cat-btn");
+const catMenu = document.getElementById("cat-menu");
+const catCurrent = document.getElementById("cat-current");
+const catIcon = document.getElementById("cat-icon");
 const sortBtn = document.getElementById("sort-btn");
 const sortMenu = document.getElementById("sort-menu");
 const sortCurrent = document.getElementById("sort-current");
@@ -128,38 +130,64 @@ sortMenu.querySelectorAll(".menu-opt").forEach((opt) => {
   });
 });
 
-// ---- Category underline tabs ----
-function moveInk(tab) {
-  if (!tab) return;
-  tabInk.style.width = `${tab.offsetWidth - 28}px`;
-  tabInk.style.transform = `translateX(${tab.offsetLeft + 14}px)`;
+// ---- Category dropdown (with per-category icons) ----
+const CAT_ICONS = [
+  [/^all/, "ph-squares-four"],
+  [/film|animation/, "ph-film-slate"],
+  [/auto|vehicle/, "ph-car-profile"],
+  [/music/, "ph-music-notes"],
+  [/pet|animal/, "ph-paw-print"],
+  [/sport/, "ph-soccer-ball"],
+  [/travel|event/, "ph-airplane-tilt"],
+  [/gaming|game/, "ph-game-controller"],
+  [/people|blog/, "ph-users-three"],
+  [/comedy/, "ph-smiley"],
+  [/entertainment/, "ph-popcorn"],
+  [/news|politic/, "ph-newspaper"],
+  [/howto|style/, "ph-sparkle"],
+  [/education/, "ph-graduation-cap"],
+  [/science|tech/, "ph-flask"],
+  [/nonprofit|activism/, "ph-hand-heart"],
+  [/movie/, "ph-film-reel"],
+  [/show/, "ph-television-simple"],
+  [/trailer/, "ph-monitor-play"],
+];
+function iconForCategory(name) {
+  const n = (name || "").toLowerCase();
+  for (const [re, icon] of CAT_ICONS) if (re.test(n)) return icon;
+  return "ph-tag";
 }
+
+const catCtl = wireMenu(catBtn, catMenu);
 async function loadCategories(region) {
-  cattabs.querySelectorAll(".tab").forEach((t) => t.remove());
   state.category = "0";
-  const tabs = [["0", "All"]];
+  catCurrent.textContent = "All categories";
+  catIcon.className = "ph ph-squares-four";
+  const cats = [["0", "All categories"]];
   try {
     const res = await fetch(`/api/categories?region=${region}`);
     const data = await res.json();
-    (data.items || []).filter((c) => c.snippet?.assignable).forEach((c) => tabs.push([c.id, c.snippet.title]));
+    (data.items || []).filter((c) => c.snippet?.assignable).forEach((c) => cats.push([c.id, c.snippet.title]));
   } catch (_) { /* optional */ }
-  tabs.forEach(([id, name], i) => {
+  catMenu.innerHTML = "";
+  cats.forEach(([id, name]) => {
+    const icon = iconForCategory(name);
     const b = document.createElement("button");
-    b.className = "tab" + (i === 0 ? " is-active" : "");
-    b.dataset.cat = id; b.textContent = name;
+    b.className = "cat-opt" + (id === "0" ? " is-active" : "");
+    b.setAttribute("role", "option");
+    b.innerHTML = `<i class="ph ${icon}"></i><span>${esc(name)}</span>`;
     b.addEventListener("click", () => {
-      cattabs.querySelectorAll(".tab").forEach((t) => t.classList.remove("is-active"));
-      b.classList.add("is-active");
-      moveInk(b);
-      b.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
       state.category = id;
+      catCurrent.textContent = name;
+      catIcon.className = `ph ${icon}`;
+      catMenu.querySelectorAll(".cat-opt").forEach((o) => o.classList.remove("is-active"));
+      b.classList.add("is-active");
+      catCtl.close();
       load();
     });
-    cattabs.insertBefore(b, tabInk);
+    catMenu.appendChild(b);
   });
-  requestAnimationFrame(() => moveInk(cattabs.querySelector(".tab.is-active")));
 }
-window.addEventListener("resize", () => moveInk(cattabs.querySelector(".tab.is-active")));
 
 // ---- Sort + render ----
 function sortedItems() {

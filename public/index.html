@@ -14,8 +14,6 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div class="glow"></div>
-
   <header class="bar">
     <a class="brand" href="/">
       <span class="brand-mark"><i class="ph-duotone ph-compass"></i></span>
@@ -46,13 +44,17 @@
     </section>
 
     <div class="toolbar">
-      <nav id="cattabs" class="cattabs" aria-label="Categories">
-        <button class="tab is-active" data-cat="0">All</button>
-        <span class="tab-ink" aria-hidden="true"></span>
-      </nav>
+      <div class="cat-picker">
+        <button id="cat-btn" class="picker-btn" aria-haspopup="listbox" aria-expanded="false">
+          <i id="cat-icon" class="ph ph-squares-four"></i>
+          <span id="cat-current">All categories</span>
+          <i class="ph ph-caret-down chev"></i>
+        </button>
+        <div id="cat-menu" class="menu" role="listbox" hidden></div>
+      </div>
 
       <div class="sort-picker">
-        <button id="sort-btn" class="picker-btn ghost" aria-haspopup="listbox" aria-expanded="false">
+        <button id="sort-btn" class="picker-btn" aria-haspopup="listbox" aria-expanded="false">
           <i class="ph ph-arrows-down-up"></i>
           <span id="sort-current">Trending</span>
           <i class="ph ph-caret-down chev"></i>
