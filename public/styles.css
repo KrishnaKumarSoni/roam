@@ -174,6 +174,7 @@ main { position: relative; z-index: 1; padding: 0 clamp(16px, 4vw, 44px) 64px; m
 
 /* ---------- RISING BAR ---------- */
 .rising-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 0 2px; }
+.rising-bar[hidden] { display: none; }
 .rising-cap { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--burnt); margin-right: 4px; }
 .rising-cap i { font-size: 15px; }
 .rb-pick { position: relative; }

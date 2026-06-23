@@ -96,13 +96,11 @@ const timeAgo = (iso) => {
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const regionName = (code) => (REGIONS.find((r) => r[0] === code) || [code, code])[1];
 
-// Pick the best available thumbnail (crisp). YouTube ids resolve to fixed sizes.
-const thumbOf = (s, big) => {
+// Grid-sized thumbnail: high (480px) is crisp for a ~340px card and ~5x
+// lighter than maxres (1280px), so 50 cards load fast.
+const thumbOf = (s) => {
   const t = s.thumbnails || {};
-  const order = big
-    ? [t.maxres, t.standard, t.high, t.medium, t.default]
-    : [t.maxres, t.standard, t.high, t.medium, t.default];
-  for (const x of order) if (x?.url) return x.url;
+  for (const x of [t.high, t.standard, t.medium, t.default]) if (x?.url) return x.url;
   return "";
 };
 
@@ -333,7 +331,7 @@ function buildCard(v, idx, underdog) {
       ${underdog ? "" : `<span class="rank">${idx + 1}</span>`}
       ${showReach ? `<span class="reach"><i class="ph-fill ph-rocket-launch"></i>${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}× reach</span>` : ""}
       <div class="thumb-fallback" style="display:none"><i class="ph ph-image-broken"></i></div>
-      <img loading="lazy" src="${esc(thumb)}" alt="${esc(s.title || "")}"
+      <img loading="lazy" decoding="async" src="${esc(thumb)}" alt="${esc(s.title || "")}"
            onload="this.style.opacity=1"
            onerror="this.style.display='none';this.previousElementSibling.style.display='grid'"
            style="opacity:0;transition:opacity .35s" />
