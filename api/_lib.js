@@ -165,14 +165,19 @@ const RISING_SUB_FLOOR = 100;      // below this, sub counts are usually stale/a
 const RISING_SUB_CEILING = 100000; // max channel size considered an underdog
 const RISING_MIN_VIEWS = 3000;     // absolute floor so we don't show noise
 const RISING_MIN_RATIO = 1.3;      // views must beat subs by this much ("nice ones")
+const RISING_MIN_LIKE_RATIO = 0.01; // likes/views >= 1% — real content earns likes; re-upload farms don't
 const RISING_POOL_CAP = 200;
 
 // Shared filter: is this an "underdog" video? (Shorts handled separately.)
 function isUnderdog(v) {
+  const st = v.statistics || {};
   const subs = v.channelSubs;
-  const views = +v.statistics?.viewCount || 0;
+  const views = +st.viewCount || 0;
   if (subs == null || subs < RISING_SUB_FLOOR || subs > RISING_SUB_CEILING) return false;
   if (views < RISING_MIN_VIEWS || views / subs < RISING_MIN_RATIO) return false;
+  // Engagement gate: kills lyrics/content re-uploads (huge views, ~0.2% likes).
+  // Channels that hide likes are given the benefit of the doubt.
+  if (st.likeCount != null && (+st.likeCount) / views < RISING_MIN_LIKE_RATIO) return false;
   if (/-\s*Topic$/.test(v.snippet?.channelTitle || "")) return false;
   return true;
 }
