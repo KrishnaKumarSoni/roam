@@ -1,0 +1,13 @@
+{
+  "name": "roam",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Roam — wander the world's trending videos, country by country.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}
