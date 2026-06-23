@@ -154,110 +154,83 @@ function categories(region) {
   return fetchYouTube("videoCategories", { part: "snippet", regionCode: region });
 }
 
-// ---- Rising creators ("real" Underdogs) ----
-// Find recent, high-view videos from SMALL channels — these never appear in the
-// trending chart. We cast a wide net (top-viewed videos in the last 72h), drop
-// mega-channels, and return an enriched pool the client filters instantly.
+// ---- Rising creators ("Underdogs") ----
+// Small channels punching way above their weight. Instead of expensive
+// search.list (100 units), we fan out the mostPopular chart across every
+// category (1 unit each). Niche categories (Pets, Autos, Science...) have a
+// low bar to trend, so small channels surface there — yielding a big pool for
+// ~25 units/region. Works in every region; cached 24h.
 const RISING_TTL = 24 * 60 * 60 * 1000; // 24h
-const RISING_WINDOW_H = 72;
+const RISING_SUB_FLOOR = 100;      // below this, sub counts are usually stale/artifacts (e.g. 2-sub VEVO)
 const RISING_SUB_CEILING = 100000; // max channel size considered an underdog
 const RISING_MIN_VIEWS = 3000;     // absolute floor so we don't show noise
 const RISING_MIN_RATIO = 1.3;      // views must beat subs by this much ("nice ones")
-const RISING_PAGES = 2;            // viewCount pages per seed — deeper pages hold the smaller channels
-const RISING_POOL_CAP = 300;
-// search.list costs 100 units/call (vs 1 for trending), so the seed sweep is the
-// quota driver. Keep it modest and cache 24h. needs a query term (region-only
-// search returns nothing), so we sweep broad seeds to approximate "rising region-wide".
-const RISING_SEEDS = ["music", "gaming", "vlog", "comedy", "news", "sports", "dance", "cooking"];
+const RISING_POOL_CAP = 200;
 
-// Shared filter: is this an "underdog" video?
+// Shared filter: is this an "underdog" video? (Shorts handled separately.)
 function isUnderdog(v) {
   const subs = v.channelSubs;
   const views = +v.statistics?.viewCount || 0;
-  if (subs == null || subs <= 0 || subs > RISING_SUB_CEILING) return false;
+  if (subs == null || subs < RISING_SUB_FLOOR || subs > RISING_SUB_CEILING) return false;
   if (views < RISING_MIN_VIEWS || views / subs < RISING_MIN_RATIO) return false;
   if (/-\s*Topic$/.test(v.snippet?.channelTitle || "")) return false;
   return true;
 }
 
-async function rising(region, query) {
-  const q = (query || "").trim();
-  const key = `rising:${region}:${q.toLowerCase() || "_all"}`;
+async function rising(region) {
+  const key = `rising:${region}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.t < RISING_TTL) return { status: 200, json: hit.data, cached: true };
 
-  const publishedAfter = new Date(Date.now() - RISING_WINDOW_H * 3600 * 1000).toISOString();
-  const seeds = q ? [q] : RISING_SEEDS;
-  const byId = new Map();
-
-  // A) Cheap source (1 unit): underdogs already hiding in the trending chart.
-  //    Always included, so the feed is never empty even if search quota is gone.
+  // 1) Category ids for this region.
+  let catIds = [];
   try {
-    const tr = await trending(region, "0");
-    (tr.json?.items || []).forEach((v) => { if (isUnderdog(v)) byId.set(v.id, v); });
+    const c = await categories(region);
+    catIds = (c.json?.items || []).filter((x) => x.snippet?.assignable).map((x) => x.id);
   } catch (_) {}
 
-  // B) Search sweep (100 units/call) — the main source. Page deep into
-  //    order=viewCount: page 1 is mega-channels (filtered out), deeper pages
-  //    hold the smaller channels with high views — i.e. the actual underdogs.
-  let searchOk = false;
-  const searchSeed = async (seed) => {
-    const out = [];
-    let pageToken;
-    for (let p = 0; p < (q ? RISING_PAGES + 1 : RISING_PAGES); p++) {
-      const params = {
-        part: "snippet", type: "video", order: "viewCount",
-        regionCode: region, publishedAfter, maxResults: "50", q: seed,
-      };
-      if (pageToken) params.pageToken = pageToken;
-      const { status, json } = await fetchYouTube("search", params).catch(() => ({ status: 0, json: {} }));
-      if (status !== 200) break; // quota/errors: stop quietly, keep what we have
-      searchOk = true;
-      (json.items || []).forEach((it) => { if (it.id?.videoId) out.push(it.id.videoId); });
-      pageToken = json.nextPageToken;
-      if (!pageToken) break;
-    }
-    return out;
-  };
-  const seedResults = await Promise.all(seeds.map(searchSeed));
-  const ids = [...new Set(seedResults.flat())].filter((id) => !byId.has(id));
-
-  if (ids.length) {
-    // Video details (views, duration, publish time).
-    let vids = [];
-    for (let i = 0; i < ids.length; i += 50) {
-      const { json } = await fetchYouTube("videos", { part: "snippet,statistics,contentDetails", id: ids.slice(i, i + 50).join(","), maxResults: "50" });
-      vids = vids.concat(json.items || []);
-    }
-    const shorts = await findShorts(vids);
-    vids = vids.filter((v) => !shorts.has(v.id));
-
-    // Channel subscriber counts + avatars.
-    const chIds = [...new Set(vids.map((v) => v.snippet?.channelId).filter(Boolean))];
-    const subMap = {}, thumbMap = {};
-    for (let i = 0; i < chIds.length; i += 50) {
-      const { json } = await fetchYouTube("channels", { part: "snippet,statistics", id: chIds.slice(i, i + 50).join(","), maxResults: "50" });
-      (json.items || []).forEach((c) => {
-        const t = c.snippet?.thumbnails;
-        thumbMap[c.id] = (t?.medium || t?.default || {}).url || null;
-        subMap[c.id] = c.statistics?.hiddenSubscriberCount ? null : (+c.statistics?.subscriberCount || null);
-      });
-    }
-    for (const v of vids) {
-      v.channelThumb = thumbMap[v.snippet?.channelId] || null;
-      v.channelSubs = subMap[v.snippet?.channelId] ?? null;
-      if (isUnderdog(v)) byId.set(v.id, v);
-    }
+  // 2) Fan out mostPopular across the overall chart + every category (1 unit each).
+  const charts = ["0", ...catIds];
+  const lists = await Promise.all(
+    charts.map((cat) => {
+      const p = { part: "snippet,statistics,contentDetails", chart: "mostPopular", regionCode: region, maxResults: "50" };
+      if (cat !== "0") p.videoCategoryId = cat;
+      return fetchYouTube("videos", p).catch(() => ({ json: {} }));
+    })
+  );
+  const byId = new Map();
+  lists.forEach((r) => (r.json?.items || []).forEach((v) => byId.set(v.id, v)));
+  let vids = [...byId.values()];
+  if (!vids.length) {
+    const data = { items: [] };
+    cache.set(key, { t: Date.now() - (RISING_TTL - 30 * 60 * 1000), data }); // retry soon
+    return { status: 200, json: data };
   }
 
-  const out = [...byId.values()].sort(
-    (a, b) => (b.statistics.viewCount / Math.max(b.channelSubs, 1)) - (a.statistics.viewCount / Math.max(a.channelSubs, 1))
-  );
-  const data = { items: out.slice(0, RISING_POOL_CAP), window: RISING_WINDOW_H };
-  // Full 24h cache only when the search sweep succeeded; otherwise cache briefly
-  // so the pool recovers once search quota resets.
-  const ttl = searchOk ? RISING_TTL : 30 * 60 * 1000;
-  cache.set(key, { t: Date.now() - (RISING_TTL - ttl), data });
+  // 3) Subscriber counts + avatars for the pooled channels.
+  const chIds = [...new Set(vids.map((v) => v.snippet?.channelId).filter(Boolean))];
+  const subMap = {}, thumbMap = {};
+  for (let i = 0; i < chIds.length; i += 50) {
+    const { json } = await fetchYouTube("channels", { part: "snippet,statistics", id: chIds.slice(i, i + 50).join(","), maxResults: "50" });
+    (json.items || []).forEach((c) => {
+      const t = c.snippet?.thumbnails;
+      thumbMap[c.id] = (t?.medium || t?.default || {}).url || null;
+      subMap[c.id] = c.statistics?.hiddenSubscriberCount ? null : (+c.statistics?.subscriberCount || null);
+    });
+  }
+  vids.forEach((v) => {
+    v.channelSubs = subMap[v.snippet?.channelId] ?? null;
+    v.channelThumb = thumbMap[v.snippet?.channelId] || null;
+  });
+
+  // 4) Keep underdogs, drop Shorts (probe only the small survivor set), rank by reach.
+  let cand = vids.filter(isUnderdog);
+  const shorts = await findShorts(cand);
+  cand = cand.filter((v) => !shorts.has(v.id));
+  cand.sort((a, b) => (b.statistics.viewCount / Math.max(b.channelSubs, 1)) - (a.statistics.viewCount / Math.max(a.channelSubs, 1)));
+
+  const data = { items: cand.slice(0, RISING_POOL_CAP) };
+  cache.set(key, { t: Date.now(), data });
   return { status: 200, json: data };
 }
 
