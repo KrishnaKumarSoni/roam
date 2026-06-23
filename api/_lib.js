@@ -158,10 +158,11 @@ function categories(region) {
 // Find recent, high-view videos from SMALL channels — these never appear in the
 // trending chart. We cast a wide net (top-viewed videos in the last 72h), drop
 // mega-channels, and return an enriched pool the client filters instantly.
-const RISING_TTL = 60 * 60 * 1000; // 1h
+const RISING_TTL = 24 * 60 * 60 * 1000; // 24h
 const RISING_WINDOW_H = 72;
-const RISING_SUB_CEILING = 200000; // keep only smallish channels in the pool
-const RISING_MIN_VIEWS = 10000;    // floor; client raises it
+const RISING_SUB_CEILING = 100000; // max channel size considered an underdog
+const RISING_MIN_VIEWS = 3000;     // absolute floor so we don't show noise
+const RISING_MIN_RATIO = 1.5;      // views must beat subs by this much ("nice ones")
 // search.list needs a query term (region-only search returns nothing), so we
 // sweep a basket of broad seeds to approximate "what's rising region-wide".
 const RISING_SEEDS = ["music", "gaming", "vlog", "comedy", "news", "sports", "dance", "cooking", "podcast", "challenge"];
@@ -175,12 +176,19 @@ async function rising(region, query) {
   const publishedAfter = new Date(Date.now() - RISING_WINDOW_H * 3600 * 1000).toISOString();
   const seeds = q ? [q] : RISING_SEEDS;
 
-  // 1) Candidate video ids — top-viewed recent uploads per seed (region-scoped).
+  // 1) Candidate video ids per seed (region-scoped, last 72h). We combine two
+  //    lenses: order=viewCount (big breakouts) and order=date (recent uploads,
+  //    which lets smaller-view videos from tiny channels into the pool too).
+  const queries = [];
+  for (const seed of seeds) {
+    queries.push(["viewCount", seed]);
+    queries.push(["date", seed]);
+  }
   let ids = [];
   const searches = await Promise.all(
-    seeds.map((seed) =>
+    queries.map(([order, seed]) =>
       fetchYouTube("search", {
-        part: "snippet", type: "video", order: "viewCount",
+        part: "snippet", type: "video", order,
         regionCode: region, publishedAfter, maxResults: "50", q: seed,
       }).catch(() => ({ status: 0, json: {} }))
     )
@@ -212,14 +220,15 @@ async function rising(region, query) {
     });
   }
 
-  // 5) Keep small channels with real traction; rank by reach ratio.
+  // 5) Keep small channels whose views meaningfully beat their sub count.
   const out = [];
   for (const v of vids) {
     const subs = subMap[v.snippet?.channelId];
     const views = +v.statistics?.viewCount || 0;
-    if (subs == null) continue;                                   // need subs to judge
+    if (subs == null || subs <= 0) continue;                      // need subs to judge
     if (subs > RISING_SUB_CEILING) continue;                      // not an underdog
-    if (views < RISING_MIN_VIEWS) continue;                       // needs traction
+    if (views < RISING_MIN_VIEWS) continue;                       // absolute noise floor
+    if (views / subs < RISING_MIN_RATIO) continue;                // must outperform its base
     if (/-\s*Topic$/.test(v.snippet?.channelTitle || "")) continue; // auto-generated
     v.channelThumb = thumbMap[v.snippet?.channelId] || null;
     v.channelSubs = subs;

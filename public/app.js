@@ -49,19 +49,16 @@ const reachRatio = (v) => {
 
 // ---- Rising creators (real Underdogs) config ----
 const SUB_OPTS = [
-  [5000, "Under 5K subs"], [10000, "Under 10K subs"], [15000, "Under 15K subs"],
-  [25000, "Under 25K subs"], [50000, "Under 50K subs"], [100000, "Under 100K subs"],
+  [5000, "Under 5K subs"], [10000, "Under 10K subs"], [25000, "Under 25K subs"],
+  [50000, "Under 50K subs"], [100000, "Under 100K subs"],
 ];
-const VIEW_OPTS = [[10000, "10K+ views"], [50000, "50K+ views"], [100000, "100K+ views"], [250000, "250K+ views"]];
-const WINDOW_OPTS = [[24, "Last 24h"], [48, "Last 48h"], [72, "Last 72h"]];
 
 const risingBar = document.getElementById("rising-bar");
 const catPicker = document.querySelector(".cat-picker");
 const sortPicker = document.querySelector(".sort-picker");
 
 state.maxSubs = +localStorage.getItem("maxSubs") || 10000;
-state.minViews = +localStorage.getItem("minViews") || 50000;
-state.windowH = +localStorage.getItem("windowH") || 48;
+if (!SUB_OPTS.some((o) => o[0] === state.maxSubs)) state.maxSubs = 10000;
 state.risingItems = [];
 state.risingKey = null;
 
@@ -281,13 +278,7 @@ function buildPicker(container, caption, options, current, onChange) {
 }
 
 buildPicker(document.getElementById("rb-subs"), "", SUB_OPTS, state.maxSubs, (v) => {
-  state.maxSubs = v; localStorage.setItem("maxSubs", v); renderVideos();
-});
-buildPicker(document.getElementById("rb-views"), "", VIEW_OPTS, state.minViews, (v) => {
-  state.minViews = v; localStorage.setItem("minViews", v); renderVideos();
-});
-buildPicker(document.getElementById("rb-window"), "", WINDOW_OPTS, state.windowH, (v) => {
-  state.windowH = v; localStorage.setItem("windowH", v); renderVideos();
+  state.maxSubs = v; localStorage.setItem("maxSubs", v); renderRising();
 });
 
 // ---- Trending view filter/sort ----
@@ -299,43 +290,11 @@ function visibleItems() {
   return items;
 }
 
-// ---- Rising view: filter the cached pool, auto-relaxing to avoid empties ----
+// ---- Rising view: hard sub-ceiling filter, ranked by reach ----
 function filterRising() {
-  const pool = state.risingItems;
-  if (!pool.length) return { items: [], note: "" };
-  const now = Date.now();
-  const pass = (maxSubs, minViews, windowH) =>
-    pool.filter((v) =>
-      v.channelSubs <= maxSubs &&
-      (+v.statistics?.viewCount || 0) >= minViews &&
-      (now - new Date(v.snippet.publishedAt).getTime()) <= windowH * 3600 * 1000
-    );
-
-  let items = pass(state.maxSubs, state.minViews, state.windowH);
-  let note = "";
-  if (!items.length) {
-    // Relax in order: window -> min views -> sub ceiling.
-    const viewSteps = VIEW_OPTS.map((o) => o[0]).filter((x) => x <= state.minViews).reverse();
-    const subSteps = SUB_OPTS.map((o) => o[0]).filter((x) => x >= state.maxSubs);
-    outer:
-    for (const w of [Math.max(state.windowH, 72), 72]) {
-      for (const mv of viewSteps) {
-        for (const ms of subSteps) {
-          items = pass(ms, mv, w);
-          if (items.length) {
-            const bits = [];
-            if (ms !== state.maxSubs) bits.push(`under ${fmt(ms)} subs`);
-            if (mv !== state.minViews) bits.push(`${fmt(mv)}+ views`);
-            if (w !== state.windowH) bits.push(`last ${w}h`);
-            note = bits.length ? `No exact matches — widened to ${bits.join(", ")}.` : "";
-            break outer;
-          }
-        }
-      }
-    }
-  }
-  items = items.slice().sort((a, b) => reachRatio(b) - reachRatio(a));
-  return { items, note };
+  return state.risingItems
+    .filter((v) => v.channelSubs <= state.maxSubs)
+    .sort((a, b) => reachRatio(b) - reachRatio(a));
 }
 
 function showSkeletons() {
@@ -410,13 +369,19 @@ function renderVideos() {
 }
 
 function renderRising() {
-  const { items, note } = filterRising();
+  const items = filterRising();
   grid.innerHTML = "";
   if (!items.length) {
-    setStatus("No rising creators found in this region right now. Try another region.", false);
+    const bigger = SUB_OPTS.find((o) => o[0] > state.maxSubs);
+    setStatus(
+      state.risingItems.length
+        ? `No breakout videos from channels under ${fmt(state.maxSubs)} subs right now${bigger ? ` — try “Under ${fmt(bigger[0])} subs.”` : "."}`
+        : "No rising creators found in this region right now. Try another region.",
+      false
+    );
     return;
   }
-  setStatus(note || null);
+  setStatus(null);
   items.forEach((v, idx) => grid.appendChild(buildCard(v, idx, true)));
 }
 
