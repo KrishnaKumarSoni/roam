@@ -44,13 +44,24 @@
     </section>
 
     <div class="toolbar">
-      <div class="cat-picker">
-        <button id="cat-btn" class="picker-btn" aria-haspopup="listbox" aria-expanded="false">
-          <i id="cat-icon" class="ph ph-squares-four"></i>
-          <span id="cat-current">All categories</span>
-          <i class="ph ph-caret-down chev"></i>
+      <div class="tool-left">
+        <div class="cat-picker">
+          <button id="cat-btn" class="picker-btn" aria-haspopup="listbox" aria-expanded="false">
+            <i id="cat-icon" class="ph ph-squares-four"></i>
+            <span id="cat-current">All categories</span>
+            <i class="ph ph-caret-down chev"></i>
+          </button>
+          <div id="cat-menu" class="menu" role="listbox" hidden></div>
+        </div>
+
+        <button id="local-toggle" class="toggle" aria-pressed="false"
+                title="Hide videos that are trending worldwide — show only what this country uniquely watches">
+          <i class="ph ph-sparkle"></i><span>Local gems</span>
         </button>
-        <div id="cat-menu" class="menu" role="listbox" hidden></div>
+        <button id="under-toggle" class="toggle" aria-pressed="false"
+                title="Rank by reach beyond the channel's own audience — surfaces smaller creators breaking out">
+          <i class="ph ph-rocket-launch"></i><span>Underdogs</span>
+        </button>
       </div>
 
       <div class="sort-picker">

@@ -64,6 +64,31 @@ async function findShorts(items) {
 const cache = new Map();
 const TTL = 15 * 60 * 1000;
 
+// ---- Global trending set (for "Local Gems") ----
+// A video is "global" if it trends in many countries at once. We compute this
+// from a diverse basket ONCE every 2 hours and reuse it for every region, so
+// the marginal cost is ~10 units / 2h no matter how much traffic we get.
+const GLOBAL_BASKET = ["US", "IN", "GB", "BR", "JP", "DE", "FR", "NG", "ID", "MX"];
+const GLOBAL_TTL = 2 * 60 * 60 * 1000;
+const GLOBAL_MIN_COUNTRIES = 3; // appears in >=3 baskets => global monoculture
+let globalCache = { t: 0, set: new Set() };
+
+async function getGlobalSet() {
+  if (globalCache.set.size && Date.now() - globalCache.t < GLOBAL_TTL) return globalCache.set;
+  const counts = new Map();
+  const lists = await Promise.all(
+    GLOBAL_BASKET.map((rc) =>
+      fetchYouTube("videos", { part: "snippet", chart: "mostPopular", regionCode: rc, maxResults: "50" })
+        .catch(() => ({ json: {} }))
+    )
+  );
+  lists.forEach((r) => (r.json.items || []).forEach((v) => counts.set(v.id, (counts.get(v.id) || 0) + 1)));
+  const set = new Set();
+  for (const [id, c] of counts) if (c >= GLOBAL_MIN_COUNTRIES) set.add(id);
+  globalCache = { t: Date.now(), set };
+  return set;
+}
+
 async function trending(region, category) {
   const key = `${region}:${category}`;
   const hit = cache.get(key);
@@ -92,19 +117,33 @@ async function trending(region, category) {
   const shorts = await findShorts(items);
   items = items.filter((v) => !shorts.has(v.id)).slice(0, 50);
 
-  // Enrich with real channel avatars (one extra call, up to 50 channel ids).
+  // Enrich with channel avatars + subscriber count (one call; statistics is free).
   try {
     const ids = [...new Set(items.map((v) => v.snippet?.channelId).filter(Boolean))].slice(0, 50);
     if (ids.length) {
-      const ch = await fetchYouTube("channels", { part: "snippet", id: ids.join(","), maxResults: "50" });
+      const ch = await fetchYouTube("channels", { part: "snippet,statistics", id: ids.join(","), maxResults: "50" });
       const map = {};
       (ch.json.items || []).forEach((c) => {
         const t = c.snippet?.thumbnails;
-        map[c.id] = (t?.medium || t?.default || {}).url || null;
+        const hidden = c.statistics?.hiddenSubscriberCount;
+        map[c.id] = {
+          thumb: (t?.medium || t?.default || {}).url || null,
+          subs: hidden ? null : (+c.statistics?.subscriberCount || null),
+        };
       });
-      items.forEach((v) => { v.channelThumb = map[v.snippet?.channelId] || null; });
+      items.forEach((v) => {
+        const m = map[v.snippet?.channelId] || {};
+        v.channelThumb = m.thumb || null;
+        v.channelSubs = m.subs ?? null;
+      });
     }
-  } catch (_) { /* avatars are best-effort */ }
+  } catch (_) { /* enrichment is best-effort */ }
+
+  // Tag each video with whether it's part of the global monoculture.
+  try {
+    const gset = await getGlobalSet();
+    items.forEach((v) => { v.isGlobal = gset.has(v.id); });
+  } catch (_) { items.forEach((v) => { v.isGlobal = false; }); }
 
   const data = { items };
   cache.set(key, { t: Date.now(), data });

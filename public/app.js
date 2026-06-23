@@ -23,6 +23,8 @@ const catIcon = document.getElementById("cat-icon");
 const sortBtn = document.getElementById("sort-btn");
 const sortMenu = document.getElementById("sort-menu");
 const sortCurrent = document.getElementById("sort-current");
+const localToggle = document.getElementById("local-toggle");
+const underToggle = document.getElementById("under-toggle");
 
 const SORT_LABELS = { trending: "Trending", views: "Most viewed", newest: "Newest" };
 
@@ -30,9 +32,20 @@ const state = {
   region: localStorage.getItem("region") || "US",
   category: "0",
   sort: localStorage.getItem("sort") || "trending",
+  localOnly: localStorage.getItem("localOnly") === "1",
+  underdogs: localStorage.getItem("underdogs") === "1",
   items: [],
 };
 if (!SORT_LABELS[state.sort]) state.sort = "trending";
+
+// Outperformance: views relative to the channel's own subscriber base.
+const reachRatio = (v) => {
+  const subs = v.channelSubs;
+  if (!subs || subs <= 0) return 0;
+  // Skip YouTube's auto-generated "… - Topic" music channels — not real creators.
+  if (/-\s*Topic$/.test(v.snippet?.channelTitle || "")) return 0;
+  return (+v.statistics?.viewCount || 0) / subs;
+};
 
 // ---- Theme ----
 document.documentElement.setAttribute("data-theme", localStorage.getItem("theme") || "dark");
@@ -189,11 +202,37 @@ async function loadCategories(region) {
   });
 }
 
+// ---- Toggles: Local Gems (filter) + Underdogs (re-rank) ----
+function syncToggle(btn, on) {
+  btn.classList.toggle("is-on", on);
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+}
+syncToggle(localToggle, state.localOnly);
+syncToggle(underToggle, state.underdogs);
+localToggle.addEventListener("click", () => {
+  state.localOnly = !state.localOnly;
+  localStorage.setItem("localOnly", state.localOnly ? "1" : "0");
+  syncToggle(localToggle, state.localOnly);
+  renderVideos();
+});
+underToggle.addEventListener("click", () => {
+  state.underdogs = !state.underdogs;
+  localStorage.setItem("underdogs", state.underdogs ? "1" : "0");
+  syncToggle(underToggle, state.underdogs);
+  renderVideos();
+});
+
 // ---- Sort + render ----
-function sortedItems() {
-  const items = state.items.slice();
-  if (state.sort === "views") items.sort((a, b) => (+b.statistics?.viewCount || 0) - (+a.statistics?.viewCount || 0));
-  else if (state.sort === "newest") items.sort((a, b) => new Date(b.snippet.publishedAt) - new Date(a.snippet.publishedAt));
+function visibleItems() {
+  let items = state.items.slice();
+  if (state.localOnly) items = items.filter((v) => !v.isGlobal);
+  if (state.underdogs) {
+    items.sort((a, b) => reachRatio(b) - reachRatio(a)); // outperformance first
+  } else if (state.sort === "views") {
+    items.sort((a, b) => (+b.statistics?.viewCount || 0) - (+a.statistics?.viewCount || 0));
+  } else if (state.sort === "newest") {
+    items.sort((a, b) => new Date(b.snippet.publishedAt) - new Date(a.snippet.publishedAt));
+  }
   return items;
 }
 
@@ -217,15 +256,26 @@ function setStatus(msg, isError) {
 }
 
 function renderVideos() {
-  const items = sortedItems();
+  const items = visibleItems();
   grid.innerHTML = "";
-  if (!items.length) { setStatus("No trending videos for this region or category.", false); return; }
+  if (!items.length) {
+    setStatus(
+      state.localOnly
+        ? "Nothing uniquely local right now — every trending video here is also trending worldwide. Try turning off Local gems."
+        : "No trending videos for this region or category.",
+      false
+    );
+    return;
+  }
   setStatus(null);
 
   items.forEach((v, idx) => {
     const s = v.snippet || {}, st = v.statistics || {}, cd = v.contentDetails || {};
     const thumb = thumbOf(s);
     const channel = s.channelTitle || "Unknown";
+    const ratio = reachRatio(v);
+    const showReach = state.underdogs && ratio >= 1.5;
+    const subsMeta = v.channelSubs ? `<span class="dot">·</span>${fmt(v.channelSubs)} subs` : "";
     const a = document.createElement("a");
     a.className = "card";
     a.href = `https://www.youtube.com/watch?v=${v.id}`;
@@ -234,6 +284,7 @@ function renderVideos() {
     a.innerHTML = `
       <div class="thumb-wrap">
         <span class="rank">${idx + 1}</span>
+        ${showReach ? `<span class="reach"><i class="ph-fill ph-rocket-launch"></i>${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}× reach</span>` : ""}
         <div class="thumb-fallback" style="display:none"><i class="ph ph-image-broken"></i></div>
         <img loading="lazy" src="${esc(thumb)}" alt="${esc(s.title || "")}"
              onload="this.style.opacity=1"
@@ -247,7 +298,7 @@ function renderVideos() {
         <div class="card-text">
           <div class="card-title">${esc(s.title || "Untitled")}</div>
           <div class="card-channel">${esc(channel)}</div>
-          <div class="card-meta">${fmt(st.viewCount)} views<span class="dot">·</span>${timeAgo(s.publishedAt)}</div>
+          <div class="card-meta">${fmt(st.viewCount)} views${state.underdogs ? subsMeta : ""}<span class="dot">·</span>${timeAgo(s.publishedAt)}</div>
         </div>
       </div>`;
     grid.appendChild(a);

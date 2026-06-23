@@ -146,7 +146,20 @@ main { position: relative; z-index: 1; padding: 0 clamp(16px, 4vw, 44px) 64px; m
   padding: 16px 0; margin-top: 14px; background: var(--bg);
   border-bottom: 1px solid var(--stroke);
 }
+.tool-left { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-width: 0; }
 .cat-picker, .sort-picker { position: relative; }
+
+/* toggles */
+.toggle {
+  display: flex; align-items: center; gap: 7px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--stroke); color: var(--text-dim);
+  font-family: inherit; font-size: 14px; font-weight: 500; padding: 9px 13px; border-radius: 11px;
+  transition: border-color 0.22s var(--ease), background 0.22s var(--ease), color 0.22s var(--ease);
+}
+.toggle i { font-size: 16px; color: var(--text-faint); transition: color 0.22s var(--ease); }
+.toggle:hover { border-color: var(--stroke-2); color: var(--text); }
+.toggle.is-on { background: color-mix(in srgb, var(--burnt) 18%, transparent); border-color: transparent; color: var(--text); }
+.toggle.is-on i { color: var(--burnt); }
 #cat-menu { min-width: 250px; }
 .cat-opt {
   display: flex; align-items: center; gap: 11px; width: 100%; text-align: left;
@@ -214,6 +227,12 @@ main { position: relative; z-index: 1; padding: 0 clamp(16px, 4vw, 44px) 64px; m
   position: absolute; bottom: 8px; right: 8px; z-index: 2; font-family: var(--mono); font-size: 11.5px; font-weight: 500; color: #fff;
   background: rgba(10,6,3,0.82); padding: 3px 6px; border-radius: 6px;
 }
+.reach {
+  position: absolute; top: 9px; right: 9px; z-index: 2; display: flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: 11px; font-weight: 600; color: #fff;
+  background: linear-gradient(135deg, var(--ember), var(--rust)); padding: 3px 8px; border-radius: 8px;
+}
+.reach i { font-size: 12px; }
 .play { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; opacity: 0; transition: opacity 0.3s var(--ease); }
 .card:hover .play { opacity: 1; }
 .play i {
