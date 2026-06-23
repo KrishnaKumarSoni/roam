@@ -165,20 +165,28 @@ const RISING_SUB_FLOOR = 100;      // below this, sub counts are usually stale/a
 const RISING_SUB_CEILING = 100000; // max channel size considered an underdog
 const RISING_MIN_VIEWS = 3000;     // absolute floor so we don't show noise
 const RISING_MIN_RATIO = 1.3;      // views must beat subs by this much ("nice ones")
-const RISING_MIN_LIKE_RATIO = 0.01; // likes/views >= 1% — real content earns likes; re-upload farms don't
+const RISING_MIN_LIKE_RATIO = 0.015; // likes/views >= 1.5% — real content earns likes; farms don't
 const RISING_POOL_CAP = 200;
+// Auto-generated / non-creator channels (matched against the de-spaced name).
+const NONCREATOR_RE = /(vevo|-?topic)$/i;
+// Re-upload / low-effort title markers (lyrics videos, bass-boosts, ripped TV, compilations).
+const JUNK_TITLE_RE = /\b(lyrics?|letra|legendado|bass\s*boost(ed)?|slowed|reverb|sped\s*up|nightcore|\d+\s*hours?\b|looped|full\s*(movie|album|episode|show|broadcast|match|fight)|msnbc|cnn|fox\s*news|rachel\s*maddow)\b/i;
 
 // Shared filter: is this an "underdog" video? (Shorts handled separately.)
 function isUnderdog(v) {
   const st = v.statistics || {};
   const subs = v.channelSubs;
   const views = +st.viewCount || 0;
+  const channel = v.snippet?.channelTitle || "";
+  const title = v.snippet?.title || "";
   if (subs == null || subs < RISING_SUB_FLOOR || subs > RISING_SUB_CEILING) return false;
   if (views < RISING_MIN_VIEWS || views / subs < RISING_MIN_RATIO) return false;
-  // Engagement gate: kills lyrics/content re-uploads (huge views, ~0.2% likes).
-  // Channels that hide likes are given the benefit of the doubt.
-  if (st.likeCount != null && (+st.likeCount) / views < RISING_MIN_LIKE_RATIO) return false;
-  if (/-\s*Topic$/.test(v.snippet?.channelTitle || "")) return false;
+  // Engagement gate — require likes to be PUBLIC and meaningful. Re-uploads and
+  // view-farms either hide likes or sit near ~0.2%; real creators run 2%+.
+  if (st.likeCount == null) return false;
+  if ((+st.likeCount) / views < RISING_MIN_LIKE_RATIO) return false;
+  if (NONCREATOR_RE.test(channel.replace(/\s+/g, ""))) return false; // VEVO / Topic
+  if (JUNK_TITLE_RE.test(title)) return false;                       // re-uploads / low-effort
   return true;
 }
 
