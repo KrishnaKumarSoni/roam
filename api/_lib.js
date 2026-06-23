@@ -162,10 +162,23 @@ const RISING_TTL = 24 * 60 * 60 * 1000; // 24h
 const RISING_WINDOW_H = 72;
 const RISING_SUB_CEILING = 100000; // max channel size considered an underdog
 const RISING_MIN_VIEWS = 3000;     // absolute floor so we don't show noise
-const RISING_MIN_RATIO = 1.5;      // views must beat subs by this much ("nice ones")
-// search.list needs a query term (region-only search returns nothing), so we
-// sweep a basket of broad seeds to approximate "what's rising region-wide".
-const RISING_SEEDS = ["music", "gaming", "vlog", "comedy", "news", "sports", "dance", "cooking", "podcast", "challenge"];
+const RISING_MIN_RATIO = 1.3;      // views must beat subs by this much ("nice ones")
+const RISING_PAGES = 2;            // viewCount pages per seed — deeper pages hold the smaller channels
+const RISING_POOL_CAP = 300;
+// search.list costs 100 units/call (vs 1 for trending), so the seed sweep is the
+// quota driver. Keep it modest and cache 24h. needs a query term (region-only
+// search returns nothing), so we sweep broad seeds to approximate "rising region-wide".
+const RISING_SEEDS = ["music", "gaming", "vlog", "comedy", "news", "sports", "dance", "cooking"];
+
+// Shared filter: is this an "underdog" video?
+function isUnderdog(v) {
+  const subs = v.channelSubs;
+  const views = +v.statistics?.viewCount || 0;
+  if (subs == null || subs <= 0 || subs > RISING_SUB_CEILING) return false;
+  if (views < RISING_MIN_VIEWS || views / subs < RISING_MIN_RATIO) return false;
+  if (/-\s*Topic$/.test(v.snippet?.channelTitle || "")) return false;
+  return true;
+}
 
 async function rising(region, query) {
   const q = (query || "").trim();
@@ -175,69 +188,76 @@ async function rising(region, query) {
 
   const publishedAfter = new Date(Date.now() - RISING_WINDOW_H * 3600 * 1000).toISOString();
   const seeds = q ? [q] : RISING_SEEDS;
+  const byId = new Map();
 
-  // 1) Candidate video ids per seed (region-scoped, last 72h). We combine two
-  //    lenses: order=viewCount (big breakouts) and order=date (recent uploads,
-  //    which lets smaller-view videos from tiny channels into the pool too).
-  const queries = [];
-  for (const seed of seeds) {
-    queries.push(["viewCount", seed]);
-    queries.push(["date", seed]);
-  }
-  let ids = [];
-  const searches = await Promise.all(
-    queries.map(([order, seed]) =>
-      fetchYouTube("search", {
-        part: "snippet", type: "video", order,
+  // A) Cheap source (1 unit): underdogs already hiding in the trending chart.
+  //    Always included, so the feed is never empty even if search quota is gone.
+  try {
+    const tr = await trending(region, "0");
+    (tr.json?.items || []).forEach((v) => { if (isUnderdog(v)) byId.set(v.id, v); });
+  } catch (_) {}
+
+  // B) Search sweep (100 units/call) — the main source. Page deep into
+  //    order=viewCount: page 1 is mega-channels (filtered out), deeper pages
+  //    hold the smaller channels with high views — i.e. the actual underdogs.
+  let searchOk = false;
+  const searchSeed = async (seed) => {
+    const out = [];
+    let pageToken;
+    for (let p = 0; p < (q ? RISING_PAGES + 1 : RISING_PAGES); p++) {
+      const params = {
+        part: "snippet", type: "video", order: "viewCount",
         regionCode: region, publishedAfter, maxResults: "50", q: seed,
-      }).catch(() => ({ status: 0, json: {} }))
-    )
+      };
+      if (pageToken) params.pageToken = pageToken;
+      const { status, json } = await fetchYouTube("search", params).catch(() => ({ status: 0, json: {} }));
+      if (status !== 200) break; // quota/errors: stop quietly, keep what we have
+      searchOk = true;
+      (json.items || []).forEach((it) => { if (it.id?.videoId) out.push(it.id.videoId); });
+      pageToken = json.nextPageToken;
+      if (!pageToken) break;
+    }
+    return out;
+  };
+  const seedResults = await Promise.all(seeds.map(searchSeed));
+  const ids = [...new Set(seedResults.flat())].filter((id) => !byId.has(id));
+
+  if (ids.length) {
+    // Video details (views, duration, publish time).
+    let vids = [];
+    for (let i = 0; i < ids.length; i += 50) {
+      const { json } = await fetchYouTube("videos", { part: "snippet,statistics,contentDetails", id: ids.slice(i, i + 50).join(","), maxResults: "50" });
+      vids = vids.concat(json.items || []);
+    }
+    const shorts = await findShorts(vids);
+    vids = vids.filter((v) => !shorts.has(v.id));
+
+    // Channel subscriber counts + avatars.
+    const chIds = [...new Set(vids.map((v) => v.snippet?.channelId).filter(Boolean))];
+    const subMap = {}, thumbMap = {};
+    for (let i = 0; i < chIds.length; i += 50) {
+      const { json } = await fetchYouTube("channels", { part: "snippet,statistics", id: chIds.slice(i, i + 50).join(","), maxResults: "50" });
+      (json.items || []).forEach((c) => {
+        const t = c.snippet?.thumbnails;
+        thumbMap[c.id] = (t?.medium || t?.default || {}).url || null;
+        subMap[c.id] = c.statistics?.hiddenSubscriberCount ? null : (+c.statistics?.subscriberCount || null);
+      });
+    }
+    for (const v of vids) {
+      v.channelThumb = thumbMap[v.snippet?.channelId] || null;
+      v.channelSubs = subMap[v.snippet?.channelId] ?? null;
+      if (isUnderdog(v)) byId.set(v.id, v);
+    }
+  }
+
+  const out = [...byId.values()].sort(
+    (a, b) => (b.statistics.viewCount / Math.max(b.channelSubs, 1)) - (a.statistics.viewCount / Math.max(a.channelSubs, 1))
   );
-  searches.forEach((r) => (r.json.items || []).forEach((it) => { if (it.id?.videoId) ids.push(it.id.videoId); }));
-  ids = [...new Set(ids)];
-  if (!ids.length) { const data = { items: [], window: RISING_WINDOW_H }; cache.set(key, { t: Date.now(), data }); return { status: 200, json: data }; }
-
-  // 2) Video details (views, duration, publish time).
-  let vids = [];
-  for (let i = 0; i < ids.length; i += 50) {
-    const { json } = await fetchYouTube("videos", { part: "snippet,statistics,contentDetails", id: ids.slice(i, i + 50).join(","), maxResults: "50" });
-    vids = vids.concat(json.items || []);
-  }
-
-  // 3) Drop Shorts.
-  const shorts = await findShorts(vids);
-  vids = vids.filter((v) => !shorts.has(v.id));
-
-  // 4) Channel subscriber counts + avatars.
-  const chIds = [...new Set(vids.map((v) => v.snippet?.channelId).filter(Boolean))];
-  const subMap = {}, thumbMap = {};
-  for (let i = 0; i < chIds.length; i += 50) {
-    const { json } = await fetchYouTube("channels", { part: "snippet,statistics", id: chIds.slice(i, i + 50).join(","), maxResults: "50" });
-    (json.items || []).forEach((c) => {
-      const t = c.snippet?.thumbnails;
-      thumbMap[c.id] = (t?.medium || t?.default || {}).url || null;
-      subMap[c.id] = c.statistics?.hiddenSubscriberCount ? null : (+c.statistics?.subscriberCount || null);
-    });
-  }
-
-  // 5) Keep small channels whose views meaningfully beat their sub count.
-  const out = [];
-  for (const v of vids) {
-    const subs = subMap[v.snippet?.channelId];
-    const views = +v.statistics?.viewCount || 0;
-    if (subs == null || subs <= 0) continue;                      // need subs to judge
-    if (subs > RISING_SUB_CEILING) continue;                      // not an underdog
-    if (views < RISING_MIN_VIEWS) continue;                       // absolute noise floor
-    if (views / subs < RISING_MIN_RATIO) continue;                // must outperform its base
-    if (/-\s*Topic$/.test(v.snippet?.channelTitle || "")) continue; // auto-generated
-    v.channelThumb = thumbMap[v.snippet?.channelId] || null;
-    v.channelSubs = subs;
-    out.push(v);
-  }
-  out.sort((a, b) => (b.statistics.viewCount / Math.max(b.channelSubs, 1)) - (a.statistics.viewCount / Math.max(a.channelSubs, 1)));
-
-  const data = { items: out.slice(0, 120), window: RISING_WINDOW_H };
-  cache.set(key, { t: Date.now(), data });
+  const data = { items: out.slice(0, RISING_POOL_CAP), window: RISING_WINDOW_H };
+  // Full 24h cache only when the search sweep succeeded; otherwise cache briefly
+  // so the pool recovers once search quota resets.
+  const ttl = searchOk ? RISING_TTL : 30 * 60 * 1000;
+  cache.set(key, { t: Date.now() - (RISING_TTL - ttl), data });
   return { status: 200, json: data };
 }
 
