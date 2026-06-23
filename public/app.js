@@ -211,7 +211,7 @@ async function loadCategories(region) {
       catMenu.querySelectorAll(".cat-opt").forEach((o) => o.classList.remove("is-active"));
       b.classList.add("is-active");
       catCtl.close();
-      load();
+      if (state.underdogs) renderRising(); else load();
     });
     catMenu.appendChild(b);
   });
@@ -241,8 +241,7 @@ underToggle.addEventListener("click", () => {
 function applyMode() {
   const on = state.underdogs;
   risingBar.hidden = !on;
-  catPicker.style.display = on ? "none" : "";
-  sortPicker.style.display = on ? "none" : "";
+  // Category + sort stay usable in both modes; Local gems is trending-only.
   localToggle.style.display = on ? "none" : "";
   if (on) loadRising(); else load();
 }
@@ -288,11 +287,14 @@ function visibleItems() {
   return items;
 }
 
-// ---- Rising view: hard sub-ceiling filter, ranked by reach ----
+// ---- Rising view: sub-ceiling + category filter, then sort ----
 function filterRising() {
-  return state.risingItems
-    .filter((v) => v.channelSubs <= state.maxSubs)
-    .sort((a, b) => reachRatio(b) - reachRatio(a));
+  let items = state.risingItems.filter((v) => v.channelSubs <= state.maxSubs);
+  if (state.category !== "0") items = items.filter((v) => v.snippet?.categoryId === state.category);
+  if (state.sort === "views") items.sort((a, b) => (+b.statistics?.viewCount || 0) - (+a.statistics?.viewCount || 0));
+  else if (state.sort === "newest") items.sort((a, b) => new Date(b.snippet.publishedAt) - new Date(a.snippet.publishedAt));
+  else items.sort((a, b) => reachRatio(b) - reachRatio(a)); // "Trending" = reach ratio
+  return items;
 }
 
 function showSkeletons() {
@@ -372,9 +374,11 @@ function renderRising() {
   if (!items.length) {
     const bigger = SUB_OPTS.find((o) => o[0] > state.maxSubs);
     setStatus(
-      state.risingItems.length
-        ? `No breakout videos from channels under ${fmt(state.maxSubs)} subs right now${bigger ? ` — try “Under ${fmt(bigger[0])} subs.”` : "."}`
-        : "No rising creators found in this region right now. Try another region.",
+      !state.risingItems.length
+        ? "No rising creators found in this region right now. Try another region."
+        : state.category !== "0"
+          ? "No rising creators in this category right now — try “All categories.”"
+          : `No breakout videos under ${fmt(state.maxSubs)} subs right now${bigger ? ` — try “Under ${fmt(bigger[0])} subs.”` : "."}`,
       false
     );
     return;
